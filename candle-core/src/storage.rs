@@ -754,6 +754,10 @@ impl Storage {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(cond), Self::Rocm(t), Self::Rocm(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(cond), Self::Metal(t), Self::Metal(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
@@ -784,6 +788,10 @@ impl Storage {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(s), Self::Rocm(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(s), Self::Metal(indexes)) => {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
@@ -810,6 +818,9 @@ impl Storage {
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
@@ -834,6 +845,9 @@ impl Storage {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
@@ -864,6 +878,10 @@ impl Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
@@ -888,6 +906,10 @@ impl Storage {
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Cuda(storage))
+            }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Rocm(storage))
             }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
@@ -920,6 +942,10 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
@@ -943,6 +969,7 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Rocm(src), Self::Rocm(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
@@ -969,6 +996,9 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o),
             (Self::Cuda(src), Self::Cuda(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (Self::Rocm(src), Self::Rocm(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Metal(src), Self::Metal(dst)) => {
