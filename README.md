@@ -22,8 +22,8 @@ Most LLM serving stacks force a trade-off between features and resource usage.
 - **Anthropic-compatible API** — `/v1/messages` (streaming and non-streaming)
 - **Ollama-compatible API** — `/api/generate`, `/api/chat`, `/api/tags`,
   `/api/ps`, `/api/show`, `/api/version`
-- **Hardware backends** — CUDA, ROCm, Metal, MUSA, CPU, plus runtime probes for
-  Hexagon, OpenVino, CANN and Vulkan
+- **Hardware backends** — CUDA, ROCm, Metal, Hexagon, OpenVino, MUSA, CANN,
+  Vulkan and CPU
 
 ## Quick start
 
@@ -68,3 +68,4 @@ inferrs serve google/gemma-4-E2B-it
 ```bash
 inferrs serve
 ```
+

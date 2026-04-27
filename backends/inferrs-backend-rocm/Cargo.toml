@@ -2,7 +2,7 @@
 name = "inferrs-backend-rocm"
 version = "0.1.0"
 edition = "2021"
-description = "ROCm/HIP runtime probe plugin for inferrs"
+description = "ROCm backend plugin for inferrs"
 license = "Apache-2.0"
 
 [lib]

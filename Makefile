@@ -54,11 +54,6 @@ else
   CUDA_FEATURES :=
 endif
 
-# ROCm support now lives behind its own Cargo feature and does not require a
-# compile-time vendor SDK. Ship it anywhere the main binary is built so runtime
-# HIP detection can construct a native `Device::Rocm`.
-ROCM_FEATURES := --features inferrs/rocm
-
 # inferrs-backend-metal is only built on macOS (standard Apple SDK, no exotic
 # toolchain required).
 ifeq ($(UNAME_S),Darwin)
@@ -74,7 +69,7 @@ HEXAGON_PKG := -p inferrs-backend-hexagon
 # Packages that can be built/tested without GPU toolchains (CUDA, ROCm).
 # Both the Hexagon and OpenVINO backends have no exotic toolchain requirement
 # and can be built anywhere (they probe at runtime via dlopen/LoadLibrary).
-NO_GPU_PKGS := -p inferrs -p inferrs-benchmark -p inferrs-multimodal -p inferrs-kernels -p inferrs-backend-rocm -p inferrs-backend-vulkan $(HEXAGON_PKG) -p inferrs-backend-openvino $(CUDA_PKG) $(METAL_PKG)
+NO_GPU_PKGS := -p inferrs -p inferrs-benchmark -p inferrs-multimodal -p inferrs-kernels -p inferrs-backend-vulkan $(HEXAGON_PKG) -p inferrs-backend-openvino $(CUDA_PKG) $(METAL_PKG)
 
 .PHONY: all build release lint test ui oci-lib oci-lib-release
 
@@ -86,17 +81,17 @@ ui:
 	cargo build -p inferrs
 
 build: oci-lib
-	cargo build $(NO_GPU_PKGS) $(CUDA_FEATURES) $(ROCM_FEATURES)
+	cargo build $(NO_GPU_PKGS) $(CUDA_FEATURES)
 
 release: oci-lib-release
-	cargo build --release $(NO_GPU_PKGS) $(CUDA_FEATURES) $(ROCM_FEATURES)
+	cargo build --release $(NO_GPU_PKGS) $(CUDA_FEATURES)
 
 lint:
 	cargo fmt --check $(NO_GPU_PKGS)
-	cargo clippy $(NO_GPU_PKGS) $(CUDA_FEATURES) $(ROCM_FEATURES) -- -D warnings
+	cargo clippy $(NO_GPU_PKGS) $(CUDA_FEATURES) -- -D warnings
 
 test:
-	cargo test $(NO_GPU_PKGS) $(CUDA_FEATURES) $(ROCM_FEATURES)
+	cargo test $(NO_GPU_PKGS) $(CUDA_FEATURES)
 
 # Go C shared library for OCI model operations (called via FFI from Rust).
 oci-lib:

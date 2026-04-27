@@ -95,12 +95,21 @@ jobs:
         run: |
           cargo build --release --target x86_64-unknown-linux-gnu \
             -p inferrs -p inferrs-backend-cuda \
-            --features inferrs/cuda --features inferrs/rocm
+            --features inferrs/cuda
 
-      # ── ROCm backend plugin (no compile-time ROCm SDK dependency) ───────
-      # The plugin probes libamdhip64 at runtime via dlopen, so CI can build
-      # and ship it without installing ROCm on the runner.
+      # ── ROCm backend plugin ──────────────────────────────────────────────
+      - name: Install ROCm toolkit
+        run: |
+          wget -q https://repo.radeon.com/amdgpu-install/6.3.3/ubuntu/noble/amdgpu-install_6.3.60303-1_all.deb
+          sudo dpkg -i amdgpu-install_6.3.60303-1_all.deb || true
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            rocm-dev hip-dev
+
       - name: Build ROCm backend plugin
+        env:
+          ROCM_PATH: /opt/rocm
+          HIP_PATH: /opt/rocm
         run: |
           cargo build --release --target x86_64-unknown-linux-gnu \
             -p inferrs-backend-rocm
@@ -207,13 +216,14 @@ jobs:
         run: |
           cargo build --release --target aarch64-unknown-linux-gnu \
             -p inferrs -p inferrs-backend-cuda \
-            --features inferrs/cuda --features inferrs/rocm
+            --features inferrs/cuda
 
-      # ── ROCm backend plugin (no compile-time ROCm SDK dependency) ───────
-      - name: Build ROCm backend plugin
-        run: |
-          cargo build --release --target aarch64-unknown-linux-gnu \
-            -p inferrs-backend-rocm
+      # ── ROCm backend plugin ───────────────────────────────────────────────
+      # AMD's ROCm apt repository only publishes binary-amd64 packages; there
+      # are no pre-built aarch64/sbsa DEB packages available via amdgpu-install
+      # for Ubuntu 24.04.  Skip the ROCm plugin on this platform — the runtime
+      # will simply not find libinferrs_backend_rocm.so and will fall back to
+      # other available backends.
 
       # ── MUSA backend plugin (aarch64: Moore Threads ships SDK for ARM) ──
       - name: Build MUSA backend plugin
@@ -313,12 +323,49 @@ jobs:
         run: |
           cargo build --release --target x86_64-pc-windows-msvc `
             -p inferrs -p inferrs-backend-cuda `
-            --features inferrs/cuda --features inferrs/rocm
+            --features inferrs/cuda
 
-      # ── ROCm backend plugin (no compile-time ROCm SDK dependency) ───────
+      # ── ROCm backend plugin (Windows x86_64, ROCm HIP SDK) ──────────────
+      # AMD does not publish the HIP SDK on Chocolatey; install via the
+      # official AMD installer downloaded directly from AMD's CDN.
+      # The installer accepts `-install` for a silent, non-interactive run.
+      # Use the WinSvr2022 variant which is sized for server/CI workloads and
+      # matches the windows-2022 runner.
+      #
+      # The resulting DLL uses the same `inferrs_backend_probe` ABI as the
+      # Linux .so, so the Windows runtime LoadLibrary probe finds it using
+      # the same logic as on Linux.
+      - name: Install AMD HIP SDK (Windows)
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $installer = "$env:RUNNER_TEMP\AMD-HIP-SDK.exe"
+          Invoke-WebRequest `
+            -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q4-WinSvr2022-For-HIP.exe" `
+            -OutFile $installer
+          $process = Start-Process $installer -ArgumentList '-install' -NoNewWindow -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            Write-Error "AMD HIP SDK installer failed with exit code $($process.ExitCode)"
+            exit $process.ExitCode
+          }
+
       - name: Build ROCm backend plugin
         shell: pwsh
         run: |
+          # Resolve the versioned ROCm install path dynamically so the build
+          # does not break when AMD releases a newer HIP SDK version.
+          $rocmRoot = "C:\Program Files\AMD\ROCm"
+          $rocmPath = Get-ChildItem $rocmRoot -Directory |
+                        Sort-Object Name -Descending |
+                        Select-Object -First 1 -ExpandProperty FullName
+          if (-not $rocmPath) {
+            Write-Error "No ROCm installation found under $rocmRoot"
+            exit 1
+          }
+          Write-Host "Using ROCm at: $rocmPath"
+          $env:ROCM_PATH = $rocmPath
+          $env:HIP_PATH   = $rocmPath
+          $env:PATH = "$rocmPath\bin;$env:PATH"
           cargo build --release --target x86_64-pc-windows-msvc `
             -p inferrs-backend-rocm
 

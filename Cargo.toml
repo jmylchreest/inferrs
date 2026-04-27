@@ -19,7 +19,7 @@ members = [
 # `cargo build` (no -p flag) builds only the listed members.
 # To build a specific backend explicitly:
 #   cargo build -p inferrs-backend-cuda     (requires nvcc / CUDA SDK)
-#   cargo build -p inferrs-backend-rocm     (probes HIP at runtime via dlopen)
+#   cargo build -p inferrs-backend-rocm     (runtime HIP probe)
 #   cargo build -p inferrs-backend-cann     (Linux/Android only; requires
 #                                            libascendcl.so from CANN SDK)
 # The Metal backend links against the system Metal framework (always present on
@@ -36,7 +36,6 @@ default-members = [
     "inferrs-kernels",
     "backends/inferrs-backend-metal",
     "backends/inferrs-backend-musa",
-    "backends/inferrs-backend-rocm",
     "backends/inferrs-backend-vulkan",
     "backends/inferrs-backend-hexagon",
     "backends/inferrs-backend-openvino",
