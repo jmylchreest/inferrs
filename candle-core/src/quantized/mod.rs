@@ -62,6 +62,10 @@ impl Device {
                 let storage = dtype.cpu_zeros(elem_count);
                 Ok(QStorage::Cpu(storage))
             }
+            Device::Rocm(_rocm) => {
+                let storage = dtype.cpu_zeros(elem_count);
+                Ok(QStorage::Cpu(storage))
+            }
             Device::Metal(metal) => {
                 let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
                 Ok(QStorage::Metal(storage))
@@ -84,6 +88,7 @@ impl QStorage {
     pub fn from_data(data: Cow<'_, [u8]>, device: &Device, dtype: GgmlDType) -> Result<Self> {
         match device {
             Device::Cpu => Ok(Self::Cpu(dtype.from_data(data))),
+            Device::Rocm(_d) => Ok(Self::Cpu(dtype.from_data(data))),
             Device::Metal(d) => match dtype {
                 GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),

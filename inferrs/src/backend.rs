@@ -40,7 +40,7 @@
 //! **Linux x86_64 / aarch64:**
 //!   1. CUDA    (`.so`)   → `Device::new_cuda(0)`
 //!   2. MUSA    (`.so`)   → `Device::new_cuda(0)` (Moore Threads)
-//!   3. ROCm    (`.so`)   → `Device::new_cuda(0)` (HIP)
+//!   3. ROCm    (`.so`)   → HIP runtime probe; `Device::new_rocm(0)`
 //!   4. CANN    (`.so`)   → CPU fallback with info log (pending candle CANN Device)
 //!   5. Hexagon (`.so`)   → CPU fallback with info log (pending candle Hexagon Device)
 //!   6. Vulkan  (`.so`)   → CPU fallback with info log
@@ -50,7 +50,7 @@
 //! **Windows x86_64:**
 //!   1. CUDA    (`.dll`)  → `Device::new_cuda(0)`
 //!   2. MUSA    (`.dll`)  → `Device::new_cuda(0)` (Moore Threads)
-//!   3. ROCm    (`.dll`)  → `Device::new_cuda(0)` (HIP SDK for Windows)
+//!   3. ROCm    (`.dll`)  → HIP runtime probe; `Device::new_rocm(0)`
 //!   4. Vulkan  (`.dll`)  → CPU fallback with info log
 //!   5. OpenVINO (`.dll`) → CPU fallback with info log
 //!   6. CPU     (always available)

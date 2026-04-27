@@ -1,0 +1,9 @@
+[package]
+name = "hiparc"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal dynamic-loading HIP runtime wrappers for ROCm work in inferrs"
+license = "Apache-2.0"
+
+[dependencies]
+libloading = "0.8"

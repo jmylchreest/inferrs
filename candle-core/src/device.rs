@@ -8,14 +8,16 @@ use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
+    Rocm { gpu_id: usize },
     Metal { gpu_id: usize },
 }
 
-/// Cpu, Cuda, or Metal
+/// Cpu, Cuda, Rocm, or Metal
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
+    Rocm(crate::RocmDevice),
     Metal(crate::MetalDevice),
 }
 
@@ -239,13 +241,24 @@ impl Device {
         match self {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
+            Self::Rocm(_) => crate::bail!("expected a cuda device, got rocm"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+        }
+    }
+
+    pub fn as_rocm_device(&self) -> Result<&crate::RocmDevice> {
+        match self {
+            Self::Rocm(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a rocm device, got cpu"),
+            Self::Cuda(_) => crate::bail!("expected a rocm device, got cuda"),
+            Self::Metal(_) => crate::bail!("expected a rocm device, got metal"),
         }
     }
 
     pub fn as_metal_device(&self) -> Result<&crate::MetalDevice> {
         match self {
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
+            Self::Rocm(_) => crate::bail!("expected a metal device, got rocm"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
             Self::Metal(d) => Ok(d),
         }
@@ -259,10 +272,15 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
+    pub fn new_rocm(ordinal: usize) -> Result<Self> {
+        Ok(Self::Rocm(crate::RocmDevice::new(ordinal)?))
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
+            Self::Rocm(r) => r.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
         }
     }
@@ -271,6 +289,7 @@ impl Device {
         match self {
             Self::Cpu => CpuDevice.get_current_seed(),
             Self::Cuda(c) => c.get_current_seed(),
+            Self::Rocm(r) => r.get_current_seed(),
             Self::Metal(m) => m.get_current_seed(),
         }
     }
@@ -279,6 +298,7 @@ impl Device {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
@@ -288,6 +308,7 @@ impl Device {
         match self {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
+            Device::Rocm(device) => device.location(),
             Device::Metal(device) => device.location(),
         }
     }
@@ -304,9 +325,13 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
+    pub fn is_rocm(&self) -> bool {
+        matches!(self, Self::Rocm(_))
+    }
+
     pub fn supports_bf16(&self) -> bool {
         match self {
-            Self::Cuda(_) | Self::Metal(_) => true,
+            Self::Cuda(_) | Self::Rocm(_) | Self::Metal(_) => true,
             Self::Cpu => false,
         }
     }
@@ -358,6 +383,10 @@ impl Device {
                     Ok(Storage::Cuda(storage))
                 }
             }
+            Device::Rocm(device) => {
+                let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                Ok(Storage::Rocm(storage))
+            }
             Device::Metal(device) => {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
@@ -396,6 +425,10 @@ impl Device {
                     Ok(Storage::Cuda(storage))
                 }
             }
+            Device::Rocm(device) => {
+                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                Ok(Storage::Rocm(storage))
+            }
             Device::Metal(device) => {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
@@ -422,6 +455,10 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Rocm(device) => {
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Rocm(storage))
+            }
             Device::Metal(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
@@ -439,6 +476,10 @@ impl Device {
                 let storage = device.alloc_uninit(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Rocm(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Rocm(storage))
+            }
             Device::Metal(device) => {
                 let storage = device.alloc_uninit(shape, dtype)?;
                 Ok(Storage::Metal(storage))
@@ -452,6 +493,10 @@ impl Device {
             Device::Cuda(device) => {
                 let storage = device.storage_from_slice(data)?;
                 Ok(Storage::Cuda(storage))
+            }
+            Device::Rocm(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Rocm(storage))
             }
             Device::Metal(device) => {
                 let storage = device.storage_from_slice(data)?;
@@ -467,6 +512,11 @@ impl Device {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
+            }
+            Device::Rocm(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Rocm(storage))
             }
             Device::Metal(device) => {
                 let storage = array.to_cpu_storage();
@@ -484,6 +534,11 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Rocm(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Rocm(storage))
+            }
             Device::Metal(device) => {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
@@ -496,6 +551,7 @@ impl Device {
         match self {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),
+            Self::Rocm(d) => d.synchronize(),
             Self::Metal(d) => d.synchronize(),
         }
     }

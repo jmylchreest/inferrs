@@ -22,6 +22,11 @@ cuda = [
     "candle-transformers/cuda",
     "inferrs-models/cuda",
 ]
+rocm = [
+    "candle-core/rocm",
+    "candle-nn/rocm",
+    "inferrs-models/rocm",
+]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
