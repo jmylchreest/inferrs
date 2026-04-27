@@ -355,7 +355,24 @@ impl BackendStorage for RocmStorage {
     }
 
     fn matmul(&self, rhs: &Self, bmnk: (usize, usize, usize, usize), lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        self.binary_cpu(rhs, |lhs, rhs| lhs.matmul(rhs, bmnk, lhs_l, rhs_l))
+        if self.shadow.dtype() == DType::BF16 {
+            let lhs = self.shadow.to_dtype(lhs_l, DType::F32)?;
+            let rhs = rhs.shadow.to_dtype(rhs_l, DType::F32)?;
+            let lhs_l = Layout::contiguous(lhs_l.shape().clone());
+            let rhs_l = Layout::contiguous(rhs_l.shape().clone());
+            let out = lhs.matmul(&rhs, bmnk, &lhs_l, &rhs_l)?;
+
+            let (_, m, n, _) = bmnk;
+            let mut dims = lhs_l.dims().to_vec();
+            let rank = dims.len();
+            dims[rank - 2] = m;
+            dims[rank - 1] = n;
+            let out_l = Layout::contiguous(crate::Shape::from(dims));
+            let out = out.to_dtype(&out_l, DType::BF16)?;
+            self.device.storage_from_cpu_storage_owned(out)
+        } else {
+            self.binary_cpu(rhs, |lhs, rhs| lhs.matmul(rhs, bmnk, lhs_l, rhs_l))
+        }
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
