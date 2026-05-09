@@ -2,6 +2,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::cpu_backend::CpuDevice;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
+use half::{bf16, f16};
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Arc;
@@ -50,10 +51,11 @@ fn map_hip_err(err: hiparc::Error) -> crate::Error {
 }
 
 unsafe fn cast_slice_as_bytes<T>(slice: &[T]) -> &[u8] {
-    std::slice::from_raw_parts(
-        slice.as_ptr() as *const u8,
-        std::mem::size_of_val(slice),
-    )
+    std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice))
+}
+
+unsafe fn cast_slice_as_bytes_mut<T>(slice: &mut [T]) -> &mut [u8] {
+    std::slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut u8, std::mem::size_of_val(slice))
 }
 
 fn cpu_storage_as_bytes(storage: &CpuStorage) -> &[u8] {
@@ -73,6 +75,387 @@ fn cpu_storage_as_bytes(storage: &CpuStorage) -> &[u8] {
         CpuStorage::F4(v) => v.as_slice(),
         CpuStorage::F8E8M0(v) => v.as_slice(),
     }
+}
+
+fn cpu_storage_as_bytes_mut(storage: &mut CpuStorage) -> &mut [u8] {
+    match storage {
+        CpuStorage::U8(v) => v.as_mut_slice(),
+        CpuStorage::U32(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::I16(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::I32(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::I64(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::BF16(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::F16(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::F32(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::F64(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::F8E4M3(v) => unsafe { cast_slice_as_bytes_mut(v.as_mut_slice()) },
+        CpuStorage::F6E2M3(v) => v.as_mut_slice(),
+        CpuStorage::F6E3M2(v) => v.as_mut_slice(),
+        CpuStorage::F4(v) => v.as_mut_slice(),
+        CpuStorage::F8E8M0(v) => v.as_mut_slice(),
+    }
+}
+
+fn rocm_storage_from_raw_parts(
+    device: &RocmDevice,
+    ptr: *mut c_void,
+    len_bytes: usize,
+    shadow: CpuStorage,
+) -> RocmStorage {
+    RocmStorage {
+        buffer: Arc::new(RawRocmBuffer {
+            ptr,
+            len_bytes,
+            ordinal: device.ordinal,
+        }),
+        shadow,
+        device: device.clone(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HipblasMatmulConfig {
+    trans_a: hiparc::HipblasOperation,
+    trans_b: hiparc::HipblasOperation,
+    m: i32,
+    n: i32,
+    k: i32,
+    lda: i32,
+    ldb: i32,
+    ldc: i32,
+    stride_a: i64,
+    stride_b: i64,
+    stride_c: i64,
+    batch_count: i32,
+}
+
+impl HipblasMatmulConfig {
+    fn new(
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let rhs_stride = rhs_l.stride();
+        let lhs_stride = lhs_l.stride();
+        let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+        let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+        let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+        let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+
+        let (lda, trans_a) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+            (n as i32, hiparc::HipblasOperation::None)
+        } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+            (k as i32, hiparc::HipblasOperation::Transpose)
+        } else {
+            crate::bail!(
+                "ROCm matmul requires contiguous or simple-transpose rhs layout, got lhs stride {:?}, rhs stride {:?}, mnk {:?}",
+                lhs_l.stride(),
+                rhs_l.stride(),
+                (m, n, k)
+            )
+        };
+
+        let (ldb, trans_b) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+            (k as i32, hiparc::HipblasOperation::None)
+        } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+            (m as i32, hiparc::HipblasOperation::Transpose)
+        } else {
+            crate::bail!(
+                "ROCm matmul requires contiguous or simple-transpose lhs layout, got lhs stride {:?}, rhs stride {:?}, mnk {:?}",
+                lhs_l.stride(),
+                rhs_l.stride(),
+                (m, n, k)
+            )
+        };
+
+        let stride_b: usize = match lhs_stride[..lhs_stride.len() - 2] {
+            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+            [_, stride] if lhs_l.dims()[0] == 1 => stride,
+            [stride, _] if lhs_l.dims()[1] == 1 => stride,
+            [stride] => stride,
+            [] => m * k,
+            _ => crate::bail!(
+                "ROCm matmul unsupported lhs batch stride {:?} for dims {:?}",
+                lhs_l.stride(),
+                lhs_l.dims()
+            ),
+        };
+
+        let stride_a: usize = match rhs_stride[..rhs_stride.len() - 2] {
+            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+            [_, stride] if rhs_l.dims()[0] == 1 => stride,
+            [stride, _] if rhs_l.dims()[1] == 1 => stride,
+            [stride] => stride,
+            [] => n * k,
+            _ => crate::bail!(
+                "ROCm matmul unsupported rhs batch stride {:?} for dims {:?}",
+                rhs_l.stride(),
+                rhs_l.dims()
+            ),
+        };
+
+        Ok(Self {
+            trans_a,
+            trans_b,
+            m: n as i32,
+            n: m as i32,
+            k: k as i32,
+            lda,
+            ldb,
+            ldc: n as i32,
+            stride_a: stride_a as i64,
+            stride_b: stride_b as i64,
+            stride_c: (m * n) as i64,
+            batch_count: b as i32,
+        })
+    }
+}
+
+fn download_shadow(
+    runtime: &hiparc::HipRuntime,
+    ptr: *mut c_void,
+    dtype: DType,
+    elem_count: usize,
+) -> Result<CpuStorage> {
+    let mut shadow = match dtype {
+        DType::BF16 => CpuStorage::BF16(vec![bf16::ZERO; elem_count]),
+        DType::F16 => CpuStorage::F16(vec![f16::ZERO; elem_count]),
+        DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
+        DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
+        other => crate::bail!("unsupported native ROCm matmul dtype {other:?}"),
+    };
+    runtime
+        .memcpy(
+            cpu_storage_as_bytes_mut(&mut shadow).as_mut_ptr() as *mut c_void,
+            ptr,
+            cpu_storage_as_bytes(&shadow).len(),
+            hiparc::HipMemcpyKind::DeviceToHost,
+        )
+        .map_err(map_hip_err)?;
+    Ok(shadow)
+}
+
+fn native_matmul_f32(
+    device: &RocmDevice,
+    lhs: &RocmStorage,
+    rhs: &RocmStorage,
+    cfg: HipblasMatmulConfig,
+    elem_count: usize,
+) -> Result<RocmStorage> {
+    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
+    runtime.init().map_err(map_hip_err)?;
+    runtime
+        .set_device(device.ordinal as i32)
+        .map_err(map_hip_err)?;
+    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
+    let len_bytes = elem_count * std::mem::size_of::<f32>();
+    let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
+
+    let result = hipblas.sgemm_strided_batched(
+        handle.raw(),
+        cfg.trans_a,
+        cfg.trans_b,
+        cfg.m,
+        cfg.n,
+        cfg.k,
+        1.0,
+        rhs.device_ptr() as *const f32,
+        cfg.lda,
+        cfg.stride_a,
+        lhs.device_ptr() as *const f32,
+        cfg.ldb,
+        cfg.stride_b,
+        0.0,
+        out_ptr as *mut f32,
+        cfg.ldc,
+        cfg.stride_c,
+        cfg.batch_count,
+    );
+    if let Err(err) = result {
+        let _ = runtime.free(out_ptr);
+        return Err(map_hip_err(err));
+    }
+
+    let shadow = match download_shadow(&runtime, out_ptr, DType::F32, elem_count) {
+        Ok(shadow) => shadow,
+        Err(err) => {
+            let _ = runtime.free(out_ptr);
+            return Err(err);
+        }
+    };
+    Ok(rocm_storage_from_raw_parts(
+        device, out_ptr, len_bytes, shadow,
+    ))
+}
+
+fn native_matmul_f64(
+    device: &RocmDevice,
+    lhs: &RocmStorage,
+    rhs: &RocmStorage,
+    cfg: HipblasMatmulConfig,
+    elem_count: usize,
+) -> Result<RocmStorage> {
+    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
+    runtime.init().map_err(map_hip_err)?;
+    runtime
+        .set_device(device.ordinal as i32)
+        .map_err(map_hip_err)?;
+    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
+    let len_bytes = elem_count * std::mem::size_of::<f64>();
+    let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
+
+    let result = hipblas.dgemm_strided_batched(
+        handle.raw(),
+        cfg.trans_a,
+        cfg.trans_b,
+        cfg.m,
+        cfg.n,
+        cfg.k,
+        1.0,
+        rhs.device_ptr() as *const f64,
+        cfg.lda,
+        cfg.stride_a,
+        lhs.device_ptr() as *const f64,
+        cfg.ldb,
+        cfg.stride_b,
+        0.0,
+        out_ptr as *mut f64,
+        cfg.ldc,
+        cfg.stride_c,
+        cfg.batch_count,
+    );
+    if let Err(err) = result {
+        let _ = runtime.free(out_ptr);
+        return Err(map_hip_err(err));
+    }
+
+    let shadow = match download_shadow(&runtime, out_ptr, DType::F64, elem_count) {
+        Ok(shadow) => shadow,
+        Err(err) => {
+            let _ = runtime.free(out_ptr);
+            return Err(err);
+        }
+    };
+    Ok(rocm_storage_from_raw_parts(
+        device, out_ptr, len_bytes, shadow,
+    ))
+}
+
+fn native_matmul_f16(
+    device: &RocmDevice,
+    lhs: &RocmStorage,
+    rhs: &RocmStorage,
+    cfg: HipblasMatmulConfig,
+    elem_count: usize,
+) -> Result<RocmStorage> {
+    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
+    runtime.init().map_err(map_hip_err)?;
+    runtime
+        .set_device(device.ordinal as i32)
+        .map_err(map_hip_err)?;
+    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
+    let len_bytes = elem_count * std::mem::size_of::<f16>();
+    let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
+
+    let result = hipblas.hgemm_strided_batched(
+        handle.raw(),
+        cfg.trans_a,
+        cfg.trans_b,
+        cfg.m,
+        cfg.n,
+        cfg.k,
+        f16::ONE.to_bits(),
+        rhs.device_ptr() as *const u16,
+        cfg.lda,
+        cfg.stride_a,
+        lhs.device_ptr() as *const u16,
+        cfg.ldb,
+        cfg.stride_b,
+        f16::ZERO.to_bits(),
+        out_ptr as *mut u16,
+        cfg.ldc,
+        cfg.stride_c,
+        cfg.batch_count,
+    );
+    if let Err(err) = result {
+        let _ = runtime.free(out_ptr);
+        return Err(map_hip_err(err));
+    }
+
+    let shadow = match download_shadow(&runtime, out_ptr, DType::F16, elem_count) {
+        Ok(shadow) => shadow,
+        Err(err) => {
+            let _ = runtime.free(out_ptr);
+            return Err(err);
+        }
+    };
+    Ok(rocm_storage_from_raw_parts(
+        device, out_ptr, len_bytes, shadow,
+    ))
+}
+
+fn native_matmul_bf16(
+    device: &RocmDevice,
+    lhs: &RocmStorage,
+    rhs: &RocmStorage,
+    cfg: HipblasMatmulConfig,
+    elem_count: usize,
+) -> Result<RocmStorage> {
+    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
+    runtime.init().map_err(map_hip_err)?;
+    runtime
+        .set_device(device.ordinal as i32)
+        .map_err(map_hip_err)?;
+    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
+    let len_bytes = elem_count * std::mem::size_of::<bf16>();
+    let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
+    let alpha = 1.0f32;
+    let beta = 0.0f32;
+
+    let result = hipblas.gemm_strided_batched_ex(
+        handle.raw(),
+        cfg.trans_a,
+        cfg.trans_b,
+        cfg.m,
+        cfg.n,
+        cfg.k,
+        &alpha as *const f32 as *const c_void,
+        rhs.device_ptr() as *const c_void,
+        hiparc::HipDataType::R16BF,
+        cfg.lda,
+        cfg.stride_a,
+        lhs.device_ptr() as *const c_void,
+        hiparc::HipDataType::R16BF,
+        cfg.ldb,
+        cfg.stride_b,
+        &beta as *const f32 as *const c_void,
+        out_ptr,
+        hiparc::HipDataType::R16BF,
+        cfg.ldc,
+        cfg.stride_c,
+        cfg.batch_count,
+        hiparc::HipblasComputeType::Compute32F,
+        hiparc::HipblasGemmAlgo::Default,
+    );
+    if let Err(err) = result {
+        let _ = runtime.free(out_ptr);
+        return Err(map_hip_err(err));
+    }
+
+    let shadow = match download_shadow(&runtime, out_ptr, DType::BF16, elem_count) {
+        Ok(shadow) => shadow,
+        Err(err) => {
+            let _ = runtime.free(out_ptr);
+            return Err(err);
+        }
+    };
+    Ok(rocm_storage_from_raw_parts(
+        device, out_ptr, len_bytes, shadow,
+    ))
 }
 
 fn upload_shadow(device: &RocmDevice, shadow: CpuStorage) -> Result<RocmStorage> {
@@ -212,8 +595,15 @@ impl BackendStorage for RocmStorage {
         self.unary_cpu(|shadow| shadow.unary_impl::<B>(layout))
     }
 
-    fn binary_impl<B: BinaryOpT>(&self, rhs: &Self, lhs_layout: &Layout, rhs_layout: &Layout) -> Result<Self> {
-        self.binary_cpu(rhs, |lhs, rhs| lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout))
+    fn binary_impl<B: BinaryOpT>(
+        &self,
+        rhs: &Self,
+        lhs_layout: &Layout,
+        rhs_layout: &Layout,
+    ) -> Result<Self> {
+        self.binary_cpu(rhs, |lhs, rhs| {
+            lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)
+        })
     }
 
     fn where_cond(
@@ -247,7 +637,9 @@ impl BackendStorage for RocmStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        self.binary_cpu(kernel, |inp, k| inp.conv_transpose1d(l, k, kernel_l, params))
+        self.binary_cpu(kernel, |inp, k| {
+            inp.conv_transpose1d(l, k, kernel_l, params)
+        })
     }
 
     fn conv2d(
@@ -267,14 +659,26 @@ impl BackendStorage for RocmStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        self.binary_cpu(kernel, |inp, k| inp.conv_transpose2d(l, k, kernel_l, params))
+        self.binary_cpu(kernel, |inp, k| {
+            inp.conv_transpose2d(l, k, kernel_l, params)
+        })
     }
 
-    fn avg_pool2d(&self, layout: &Layout, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Self> {
+    fn avg_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
         self.unary_cpu(|shadow| shadow.avg_pool2d(layout, kernel_size, stride))
     }
 
-    fn max_pool2d(&self, layout: &Layout, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Self> {
+    fn max_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
         self.unary_cpu(|shadow| shadow.max_pool2d(layout, kernel_size, stride))
     }
 
@@ -282,7 +686,12 @@ impl BackendStorage for RocmStorage {
         self.unary_cpu(|shadow| shadow.upsample_nearest1d(layout, target_size))
     }
 
-    fn upsample_nearest2d(&self, layout: &Layout, target_h: usize, target_w: usize) -> Result<Self> {
+    fn upsample_nearest2d(
+        &self,
+        layout: &Layout,
+        target_h: usize,
+        target_w: usize,
+    ) -> Result<Self> {
         self.unary_cpu(|shadow| shadow.upsample_nearest2d(layout, target_h, target_w))
     }
 
@@ -307,8 +716,16 @@ impl BackendStorage for RocmStorage {
         })
     }
 
-    fn gather(&self, layout: &Layout, indexes: &Self, indexes_layout: &Layout, dim: usize) -> Result<Self> {
-        self.binary_cpu(indexes, |shadow, idx| shadow.gather(layout, idx, indexes_layout, dim))
+    fn gather(
+        &self,
+        layout: &Layout,
+        indexes: &Self,
+        indexes_layout: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        self.binary_cpu(indexes, |shadow, idx| {
+            shadow.gather(layout, idx, indexes_layout, dim)
+        })
     }
 
     fn scatter_set(
@@ -336,11 +753,21 @@ impl BackendStorage for RocmStorage {
     ) -> Result<()> {
         let indexes_shadow = indexes.shadow.clone();
         let src_shadow = src.shadow.clone();
-        self.mutate_cpu(|shadow| shadow.scatter_add_set(l1, &indexes_shadow, l2, &src_shadow, l3, dim))
+        self.mutate_cpu(|shadow| {
+            shadow.scatter_add_set(l1, &indexes_shadow, l2, &src_shadow, l3, dim)
+        })
     }
 
-    fn index_select(&self, indexes: &Self, source_layout: &Layout, indexes_layout: &Layout, dim: usize) -> Result<Self> {
-        self.binary_cpu(indexes, |shadow, idx| shadow.index_select(idx, source_layout, indexes_layout, dim))
+    fn index_select(
+        &self,
+        indexes: &Self,
+        source_layout: &Layout,
+        indexes_layout: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        self.binary_cpu(indexes, |shadow, idx| {
+            shadow.index_select(idx, source_layout, indexes_layout, dim)
+        })
     }
 
     fn index_add(
@@ -358,30 +785,37 @@ impl BackendStorage for RocmStorage {
         self.device.storage_from_cpu_storage_owned(shadow)
     }
 
-    fn matmul(&self, rhs: &Self, bmnk: (usize, usize, usize, usize), lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        if self.shadow.dtype() == DType::BF16 {
-            let lhs = self.shadow.to_dtype(lhs_l, DType::F32)?;
-            let rhs = rhs.shadow.to_dtype(rhs_l, DType::F32)?;
-            let lhs_l = Layout::contiguous(lhs_l.shape().clone());
-            let rhs_l = Layout::contiguous(rhs_l.shape().clone());
-            let out = lhs.matmul(&rhs, bmnk, &lhs_l, &rhs_l)?;
+    fn matmul(
+        &self,
+        rhs: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let elem_count = bmnk.0 * bmnk.1 * bmnk.2;
+        let cfg = HipblasMatmulConfig::new(bmnk, lhs_l, rhs_l);
 
-            let (_, m, n, _) = bmnk;
-            let mut dims = lhs_l.dims().to_vec();
-            let rank = dims.len();
-            dims[rank - 2] = m;
-            dims[rank - 1] = n;
-            let out_l = Layout::contiguous(crate::Shape::from(dims));
-            let out = out.to_dtype(&out_l, DType::BF16)?;
-            self.device.storage_from_cpu_storage_owned(out)
-        } else {
-            self.binary_cpu(rhs, |lhs, rhs| lhs.matmul(rhs, bmnk, lhs_l, rhs_l))
+        match (&self.shadow, &rhs.shadow, cfg) {
+            (CpuStorage::BF16(_), CpuStorage::BF16(_), Ok(cfg)) => {
+                native_matmul_bf16(&self.device, self, rhs, cfg, elem_count)
+            }
+            (CpuStorage::F16(_), CpuStorage::F16(_), Ok(cfg)) => {
+                native_matmul_f16(&self.device, self, rhs, cfg, elem_count)
+            }
+            (CpuStorage::F32(_), CpuStorage::F32(_), Ok(cfg)) => {
+                native_matmul_f32(&self.device, self, rhs, cfg, elem_count)
+            }
+            (CpuStorage::F64(_), CpuStorage::F64(_), Ok(cfg)) => {
+                native_matmul_f64(&self.device, self, rhs, cfg, elem_count)
+            }
+            _ => self.binary_cpu(rhs, |lhs, rhs| lhs.matmul(rhs, bmnk, lhs_l, rhs_l)),
         }
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let mut dst_shadow = dst.shadow.clone();
-        self.shadow.copy_strided_src(&mut dst_shadow, dst_offset, src_l)?;
+        self.shadow
+            .copy_strided_src(&mut dst_shadow, dst_offset, src_l)?;
         let device = dst.device.clone();
         *dst = device.storage_from_cpu_storage_owned(dst_shadow)?;
         Ok(())
@@ -461,11 +895,23 @@ impl BackendDevice for RocmDevice {
         upload_shadow(self, s)
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<Self::Storage> {
+    fn rand_uniform(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: f64,
+        max: f64,
+    ) -> Result<Self::Storage> {
         self.storage_from_cpu_storage_owned(CpuDevice.rand_uniform(shape, dtype, min, max)?)
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Self::Storage> {
+    fn rand_normal(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<Self::Storage> {
         self.storage_from_cpu_storage_owned(CpuDevice.rand_normal(shape, dtype, mean, std)?)
     }
 

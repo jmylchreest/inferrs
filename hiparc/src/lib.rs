@@ -9,7 +9,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     UnsupportedPlatform,
-    LibraryNotFound { candidates: Vec<PathBuf> },
+    LibraryNotFound {
+        candidates: Vec<PathBuf>,
+    },
     SymbolLoad {
         library: PathBuf,
         symbol: &'static str,
@@ -54,6 +56,44 @@ pub enum HipMemcpyKind {
     Default = 4,
 }
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+pub enum HipblasOperation {
+    None = 111,
+    Transpose = 112,
+    ConjugateTranspose = 113,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+pub enum HipblasPointerMode {
+    Host = 0,
+    Device = 1,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+pub enum HipDataType {
+    R32F = 0,
+    R64F = 1,
+    R16F = 2,
+    R16BF = 14,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+pub enum HipblasComputeType {
+    Compute16F = 0,
+    Compute32F = 2,
+    Compute64F = 7,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+pub enum HipblasGemmAlgo {
+    Default = 0,
+}
+
 type HipInitFn = unsafe extern "C" fn(u32) -> i32;
 type HipGetDeviceCountFn = unsafe extern "C" fn(*mut i32) -> i32;
 type HipSetDeviceFn = unsafe extern "C" fn(i32) -> i32;
@@ -85,6 +125,92 @@ type HipModuleLaunchKernelFn = unsafe extern "C" fn(
 
 type HipblasCreateFn = unsafe extern "C" fn(*mut *mut c_void) -> i32;
 type HipblasDestroyFn = unsafe extern "C" fn(*mut c_void) -> i32;
+type HipblasSetPointerModeFn = unsafe extern "C" fn(*mut c_void, HipblasPointerMode) -> i32;
+type HipblasSgemmStridedBatchedFn = unsafe extern "C" fn(
+    *mut c_void,
+    HipblasOperation,
+    HipblasOperation,
+    i32,
+    i32,
+    i32,
+    *const f32,
+    *const f32,
+    i32,
+    i64,
+    *const f32,
+    i32,
+    i64,
+    *const f32,
+    *mut f32,
+    i32,
+    i64,
+    i32,
+) -> i32;
+type HipblasDgemmStridedBatchedFn = unsafe extern "C" fn(
+    *mut c_void,
+    HipblasOperation,
+    HipblasOperation,
+    i32,
+    i32,
+    i32,
+    *const f64,
+    *const f64,
+    i32,
+    i64,
+    *const f64,
+    i32,
+    i64,
+    *const f64,
+    *mut f64,
+    i32,
+    i64,
+    i32,
+) -> i32;
+type HipblasHgemmStridedBatchedFn = unsafe extern "C" fn(
+    *mut c_void,
+    HipblasOperation,
+    HipblasOperation,
+    i32,
+    i32,
+    i32,
+    *const u16,
+    *const u16,
+    i32,
+    i64,
+    *const u16,
+    i32,
+    i64,
+    *const u16,
+    *mut u16,
+    i32,
+    i64,
+    i32,
+) -> i32;
+type HipblasGemmStridedBatchedExFn = unsafe extern "C" fn(
+    *mut c_void,
+    HipblasOperation,
+    HipblasOperation,
+    i32,
+    i32,
+    i32,
+    *const c_void,
+    *const c_void,
+    HipDataType,
+    i32,
+    i64,
+    *const c_void,
+    HipDataType,
+    i32,
+    i64,
+    *const c_void,
+    *mut c_void,
+    HipDataType,
+    i32,
+    i64,
+    i32,
+    HipblasComputeType,
+    HipblasGemmAlgo,
+) -> i32;
 type HiprandCreateGeneratorFn = unsafe extern "C" fn(*mut *mut c_void, i32) -> i32;
 type HiprandDestroyGeneratorFn = unsafe extern "C" fn(*mut c_void) -> i32;
 
@@ -133,10 +259,9 @@ impl HipRuntime {
 
     pub fn device_count(&self) -> Result<i32> {
         let mut count = 0;
-        map_status(
-            "hipGetDeviceCount",
-            unsafe { (self.hip_get_device_count)(&mut count) },
-        )?;
+        map_status("hipGetDeviceCount", unsafe {
+            (self.hip_get_device_count)(&mut count)
+        })?;
         Ok(count)
     }
 
@@ -145,19 +270,17 @@ impl HipRuntime {
     }
 
     pub fn synchronize(&self) -> Result<()> {
-        map_status(
-            "hipDeviceSynchronize",
-            unsafe { (self.hip_device_synchronize)() },
-        )
+        map_status("hipDeviceSynchronize", unsafe {
+            (self.hip_device_synchronize)()
+        })
     }
 
     pub fn mem_get_info(&self) -> Result<(usize, usize)> {
         let mut free = 0usize;
         let mut total = 0usize;
-        map_status(
-            "hipMemGetInfo",
-            unsafe { (self.hip_mem_get_info)(&mut free, &mut total) },
-        )?;
+        map_status("hipMemGetInfo", unsafe {
+            (self.hip_mem_get_info)(&mut free, &mut total)
+        })?;
         Ok((free, total))
     }
 
@@ -178,10 +301,9 @@ impl HipRuntime {
         size: usize,
         kind: HipMemcpyKind,
     ) -> Result<()> {
-        map_status(
-            "hipMemcpy",
-            unsafe { (self.hip_memcpy)(dst, src, size, kind) },
-        )
+        map_status("hipMemcpy", unsafe {
+            (self.hip_memcpy)(dst, src, size, kind)
+        })
     }
 
     pub fn memset(&self, dst: *mut c_void, value: i32, size: usize) -> Result<()> {
@@ -190,42 +312,41 @@ impl HipRuntime {
 
     pub fn create_stream(&self) -> Result<*mut c_void> {
         let mut stream = std::ptr::null_mut();
-        map_status(
-            "hipStreamCreate",
-            unsafe { (self.hip_stream_create)(&mut stream) },
-        )?;
+        map_status("hipStreamCreate", unsafe {
+            (self.hip_stream_create)(&mut stream)
+        })?;
         Ok(stream)
     }
 
     pub fn destroy_stream(&self, stream: *mut c_void) -> Result<()> {
-        map_status(
-            "hipStreamDestroy",
-            unsafe { (self.hip_stream_destroy)(stream) },
-        )
+        map_status("hipStreamDestroy", unsafe {
+            (self.hip_stream_destroy)(stream)
+        })
     }
 
     pub fn synchronize_stream(&self, stream: *mut c_void) -> Result<()> {
-        map_status(
-            "hipStreamSynchronize",
-            unsafe { (self.hip_stream_synchronize)(stream) },
-        )
+        map_status("hipStreamSynchronize", unsafe {
+            (self.hip_stream_synchronize)(stream)
+        })
     }
 
     pub fn module_load_data(&self, data: *const c_void) -> Result<*mut c_void> {
         let mut module = std::ptr::null_mut();
-        map_status(
-            "hipModuleLoadData",
-            unsafe { (self.hip_module_load_data)(&mut module, data) },
-        )?;
+        map_status("hipModuleLoadData", unsafe {
+            (self.hip_module_load_data)(&mut module, data)
+        })?;
         Ok(module)
     }
 
-    pub fn module_get_function(&self, module: *mut c_void, name: *const c_char) -> Result<*mut c_void> {
+    pub fn module_get_function(
+        &self,
+        module: *mut c_void,
+        name: *const c_char,
+    ) -> Result<*mut c_void> {
         let mut function = std::ptr::null_mut();
-        map_status(
-            "hipModuleGetFunction",
-            unsafe { (self.hip_module_get_function)(&mut function, module, name) },
-        )?;
+        map_status("hipModuleGetFunction", unsafe {
+            (self.hip_module_get_function)(&mut function, module, name)
+        })?;
         Ok(function)
     }
 
@@ -244,24 +365,21 @@ impl HipRuntime {
         kernel_params: *mut *mut c_void,
         extra: *mut *mut c_void,
     ) -> Result<()> {
-        map_status(
-            "hipModuleLaunchKernel",
-            unsafe {
-                (self.hip_module_launch_kernel)(
-                    function,
-                    grid_x,
-                    grid_y,
-                    grid_z,
-                    block_x,
-                    block_y,
-                    block_z,
-                    shared_mem_bytes,
-                    stream,
-                    kernel_params,
-                    extra,
-                )
-            },
-        )
+        map_status("hipModuleLaunchKernel", unsafe {
+            (self.hip_module_launch_kernel)(
+                function,
+                grid_x,
+                grid_y,
+                grid_z,
+                block_x,
+                block_y,
+                block_z,
+                shared_mem_bytes,
+                stream,
+                kernel_params,
+                extra,
+            )
+        })
     }
 
     fn from_library(lib: Library, path: PathBuf) -> Result<Self> {
@@ -285,12 +403,7 @@ impl HipRuntime {
             hip_free: load_symbol(&lib, &path, b"hipFree\0", "hipFree")?,
             hip_memcpy: load_symbol(&lib, &path, b"hipMemcpy\0", "hipMemcpy")?,
             hip_memset: load_symbol(&lib, &path, b"hipMemset\0", "hipMemset")?,
-            hip_stream_create: load_symbol(
-                &lib,
-                &path,
-                b"hipStreamCreate\0",
-                "hipStreamCreate",
-            )?,
+            hip_stream_create: load_symbol(&lib, &path, b"hipStreamCreate\0", "hipStreamCreate")?,
             hip_stream_destroy: load_symbol(
                 &lib,
                 &path,
@@ -332,6 +445,28 @@ pub struct HipBlas {
     _path: PathBuf,
     hipblas_create: HipblasCreateFn,
     hipblas_destroy: HipblasDestroyFn,
+    hipblas_set_pointer_mode: HipblasSetPointerModeFn,
+    hipblas_sgemm_strided_batched: HipblasSgemmStridedBatchedFn,
+    hipblas_dgemm_strided_batched: HipblasDgemmStridedBatchedFn,
+    hipblas_hgemm_strided_batched: HipblasHgemmStridedBatchedFn,
+    hipblas_gemm_strided_batched_ex: HipblasGemmStridedBatchedExFn,
+}
+
+pub struct HipBlasHandle<'a> {
+    blas: &'a HipBlas,
+    raw: *mut c_void,
+}
+
+impl Drop for HipBlasHandle<'_> {
+    fn drop(&mut self) {
+        let _ = self.blas.destroy_handle(self.raw);
+    }
+}
+
+impl HipBlasHandle<'_> {
+    pub fn raw(&self) -> *mut c_void {
+        self.raw
+    }
 }
 
 impl HipBlas {
@@ -350,6 +485,36 @@ impl HipBlas {
                     b"hipblasDestroy\0",
                     "hipblasDestroy",
                 )?,
+                hipblas_set_pointer_mode: load_symbol(
+                    &lib,
+                    candidate,
+                    b"hipblasSetPointerMode\0",
+                    "hipblasSetPointerMode",
+                )?,
+                hipblas_sgemm_strided_batched: load_symbol(
+                    &lib,
+                    candidate,
+                    b"hipblasSgemmStridedBatched\0",
+                    "hipblasSgemmStridedBatched",
+                )?,
+                hipblas_dgemm_strided_batched: load_symbol(
+                    &lib,
+                    candidate,
+                    b"hipblasDgemmStridedBatched\0",
+                    "hipblasDgemmStridedBatched",
+                )?,
+                hipblas_hgemm_strided_batched: load_symbol(
+                    &lib,
+                    candidate,
+                    b"hipblasHgemmStridedBatched\0",
+                    "hipblasHgemmStridedBatched",
+                )?,
+                hipblas_gemm_strided_batched_ex: load_symbol(
+                    &lib,
+                    candidate,
+                    b"hipblasGemmStridedBatchedEx\0",
+                    "hipblasGemmStridedBatchedEx",
+                )?,
                 _lib: lib,
                 _path: candidate.clone(),
             });
@@ -359,15 +524,226 @@ impl HipBlas {
 
     pub fn create_handle(&self) -> Result<*mut c_void> {
         let mut handle = std::ptr::null_mut();
-        map_status(
-            "hipblasCreate",
-            unsafe { (self.hipblas_create)(&mut handle) },
-        )?;
+        map_status("hipblasCreate", unsafe {
+            (self.hipblas_create)(&mut handle)
+        })?;
         Ok(handle)
+    }
+
+    pub fn create_host_handle(&self) -> Result<HipBlasHandle<'_>> {
+        let handle = self.create_handle()?;
+        if let Err(err) = self.set_pointer_mode(handle, HipblasPointerMode::Host) {
+            let _ = self.destroy_handle(handle);
+            return Err(err);
+        }
+        Ok(HipBlasHandle {
+            blas: self,
+            raw: handle,
+        })
     }
 
     pub fn destroy_handle(&self, handle: *mut c_void) -> Result<()> {
         map_status("hipblasDestroy", unsafe { (self.hipblas_destroy)(handle) })
+    }
+
+    pub fn set_pointer_mode(&self, handle: *mut c_void, mode: HipblasPointerMode) -> Result<()> {
+        map_status("hipblasSetPointerMode", unsafe {
+            (self.hipblas_set_pointer_mode)(handle, mode)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sgemm_strided_batched(
+        &self,
+        handle: *mut c_void,
+        trans_a: HipblasOperation,
+        trans_b: HipblasOperation,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: f32,
+        a: *const f32,
+        lda: i32,
+        stride_a: i64,
+        b: *const f32,
+        ldb: i32,
+        stride_b: i64,
+        beta: f32,
+        c: *mut f32,
+        ldc: i32,
+        stride_c: i64,
+        batch_count: i32,
+    ) -> Result<()> {
+        map_status("hipblasSgemmStridedBatched", unsafe {
+            (self.hipblas_sgemm_strided_batched)(
+                handle,
+                trans_a,
+                trans_b,
+                m,
+                n,
+                k,
+                &alpha,
+                a,
+                lda,
+                stride_a,
+                b,
+                ldb,
+                stride_b,
+                &beta,
+                c,
+                ldc,
+                stride_c,
+                batch_count,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dgemm_strided_batched(
+        &self,
+        handle: *mut c_void,
+        trans_a: HipblasOperation,
+        trans_b: HipblasOperation,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: f64,
+        a: *const f64,
+        lda: i32,
+        stride_a: i64,
+        b: *const f64,
+        ldb: i32,
+        stride_b: i64,
+        beta: f64,
+        c: *mut f64,
+        ldc: i32,
+        stride_c: i64,
+        batch_count: i32,
+    ) -> Result<()> {
+        map_status("hipblasDgemmStridedBatched", unsafe {
+            (self.hipblas_dgemm_strided_batched)(
+                handle,
+                trans_a,
+                trans_b,
+                m,
+                n,
+                k,
+                &alpha,
+                a,
+                lda,
+                stride_a,
+                b,
+                ldb,
+                stride_b,
+                &beta,
+                c,
+                ldc,
+                stride_c,
+                batch_count,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hgemm_strided_batched(
+        &self,
+        handle: *mut c_void,
+        trans_a: HipblasOperation,
+        trans_b: HipblasOperation,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: u16,
+        a: *const u16,
+        lda: i32,
+        stride_a: i64,
+        b: *const u16,
+        ldb: i32,
+        stride_b: i64,
+        beta: u16,
+        c: *mut u16,
+        ldc: i32,
+        stride_c: i64,
+        batch_count: i32,
+    ) -> Result<()> {
+        map_status("hipblasHgemmStridedBatched", unsafe {
+            (self.hipblas_hgemm_strided_batched)(
+                handle,
+                trans_a,
+                trans_b,
+                m,
+                n,
+                k,
+                &alpha,
+                a,
+                lda,
+                stride_a,
+                b,
+                ldb,
+                stride_b,
+                &beta,
+                c,
+                ldc,
+                stride_c,
+                batch_count,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_strided_batched_ex(
+        &self,
+        handle: *mut c_void,
+        trans_a: HipblasOperation,
+        trans_b: HipblasOperation,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: *const c_void,
+        a: *const c_void,
+        a_type: HipDataType,
+        lda: i32,
+        stride_a: i64,
+        b: *const c_void,
+        b_type: HipDataType,
+        ldb: i32,
+        stride_b: i64,
+        beta: *const c_void,
+        c: *mut c_void,
+        c_type: HipDataType,
+        ldc: i32,
+        stride_c: i64,
+        batch_count: i32,
+        compute_type: HipblasComputeType,
+        algo: HipblasGemmAlgo,
+    ) -> Result<()> {
+        map_status("hipblasGemmStridedBatchedEx", unsafe {
+            (self.hipblas_gemm_strided_batched_ex)(
+                handle,
+                trans_a,
+                trans_b,
+                m,
+                n,
+                k,
+                alpha,
+                a,
+                a_type,
+                lda,
+                stride_a,
+                b,
+                b_type,
+                ldb,
+                stride_b,
+                beta,
+                c,
+                c_type,
+                ldc,
+                stride_c,
+                batch_count,
+                compute_type,
+                algo,
+            )
+        })
     }
 }
 
@@ -408,18 +784,16 @@ impl HipRand {
 
     pub fn create_generator(&self, rng_type: i32) -> Result<*mut c_void> {
         let mut generator = std::ptr::null_mut();
-        map_status(
-            "hiprandCreateGenerator",
-            unsafe { (self.hiprand_create_generator)(&mut generator, rng_type) },
-        )?;
+        map_status("hiprandCreateGenerator", unsafe {
+            (self.hiprand_create_generator)(&mut generator, rng_type)
+        })?;
         Ok(generator)
     }
 
     pub fn destroy_generator(&self, generator: *mut c_void) -> Result<()> {
-        map_status(
-            "hiprandDestroyGenerator",
-            unsafe { (self.hiprand_destroy_generator)(generator) },
-        )
+        map_status("hiprandDestroyGenerator", unsafe {
+            (self.hiprand_destroy_generator)(generator)
+        })
     }
 }
 
@@ -498,7 +872,9 @@ fn secondary_library_candidates(_names: &[&str]) -> Vec<PathBuf> {
             if let Ok(root) = std::env::var(root_var) {
                 let bin_dir = Path::new(&root).join("bin");
                 for name in _names {
-                    let dll = if let Some(stem) = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".so")) {
+                    let dll = if let Some(stem) =
+                        name.strip_prefix("lib").and_then(|s| s.strip_suffix(".so"))
+                    {
                         format!("{stem}.dll")
                     } else {
                         (*name).to_string()
@@ -508,11 +884,12 @@ fn secondary_library_candidates(_names: &[&str]) -> Vec<PathBuf> {
             }
         }
         for name in _names {
-            let dll = if let Some(stem) = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".so")) {
-                format!("{stem}.dll")
-            } else {
-                (*name).to_string()
-            };
+            let dll =
+                if let Some(stem) = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".so")) {
+                    format!("{stem}.dll")
+                } else {
+                    (*name).to_string()
+                };
             candidates.push(PathBuf::from(dll));
         }
         return candidates;
