@@ -58,6 +58,7 @@ type HipInitFn = unsafe extern "C" fn(u32) -> i32;
 type HipGetDeviceCountFn = unsafe extern "C" fn(*mut i32) -> i32;
 type HipSetDeviceFn = unsafe extern "C" fn(i32) -> i32;
 type HipDeviceSynchronizeFn = unsafe extern "C" fn() -> i32;
+type HipMemGetInfoFn = unsafe extern "C" fn(*mut usize, *mut usize) -> i32;
 type HipMallocFn = unsafe extern "C" fn(*mut *mut c_void, usize) -> i32;
 type HipFreeFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type HipMemcpyFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize, HipMemcpyKind) -> i32;
@@ -94,6 +95,7 @@ pub struct HipRuntime {
     hip_get_device_count: HipGetDeviceCountFn,
     hip_set_device: HipSetDeviceFn,
     hip_device_synchronize: HipDeviceSynchronizeFn,
+    hip_mem_get_info: HipMemGetInfoFn,
     hip_malloc: HipMallocFn,
     hip_free: HipFreeFn,
     hip_memcpy: HipMemcpyFn,
@@ -147,6 +149,16 @@ impl HipRuntime {
             "hipDeviceSynchronize",
             unsafe { (self.hip_device_synchronize)() },
         )
+    }
+
+    pub fn mem_get_info(&self) -> Result<(usize, usize)> {
+        let mut free = 0usize;
+        let mut total = 0usize;
+        map_status(
+            "hipMemGetInfo",
+            unsafe { (self.hip_mem_get_info)(&mut free, &mut total) },
+        )?;
+        Ok((free, total))
     }
 
     pub fn malloc(&self, size: usize) -> Result<*mut c_void> {
@@ -268,6 +280,7 @@ impl HipRuntime {
                 b"hipDeviceSynchronize\0",
                 "hipDeviceSynchronize",
             )?,
+            hip_mem_get_info: load_symbol(&lib, &path, b"hipMemGetInfo\0", "hipMemGetInfo")?,
             hip_malloc: load_symbol(&lib, &path, b"hipMalloc\0", "hipMalloc")?,
             hip_free: load_symbol(&lib, &path, b"hipFree\0", "hipFree")?,
             hip_memcpy: load_symbol(&lib, &path, b"hipMemcpy\0", "hipMemcpy")?,

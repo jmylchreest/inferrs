@@ -107,6 +107,7 @@ indicatif = "0.17"
 rustfft = "6"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+hiparc = { workspace = true }
 
 # Linux / Android: libc for low-level dlopen/dlsym used by the CANN HBM
 # memory query in engine.rs (aclrtGetMemInfo via RTLD_NOLOAD).  The backend

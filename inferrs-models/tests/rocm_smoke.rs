@@ -183,10 +183,22 @@ fn rocm_tensor_ops_match_cpu_expectations() -> Result<()> {
         ]
     );
 
-    let ints = Tensor::new(&[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]], &device)?;
-    assert_eq!(ints.sum_keepdim((0, 2, 1))?.to_vec3::<u32>()?, vec![vec![vec![51]]]);
-    assert_eq!(ints.min_keepdim(2)?.to_vec3::<u32>()?, vec![vec![vec![1], vec![1]], vec![vec![1], vec![2]]]);
-    assert_eq!(ints.max_keepdim(2)?.to_vec3::<u32>()?, vec![vec![vec![4], vec![9]], vec![vec![7], vec![8]]]);
+    let ints = Tensor::new(
+        &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]],
+        &device,
+    )?;
+    assert_eq!(
+        ints.sum_keepdim((0, 2, 1))?.to_vec3::<u32>()?,
+        vec![vec![vec![51]]]
+    );
+    assert_eq!(
+        ints.min_keepdim(2)?.to_vec3::<u32>()?,
+        vec![vec![vec![1], vec![1]], vec![vec![1], vec![2]]]
+    );
+    assert_eq!(
+        ints.max_keepdim(2)?.to_vec3::<u32>()?,
+        vec![vec![vec![4], vec![9]], vec![vec![7], vec![8]]]
+    );
 
     Ok(())
 }
@@ -222,7 +234,10 @@ fn rocm_indexing_and_scatter_ops_match_cpu_expectations() -> Result<()> {
         ]
     );
 
-    let gather_ids = Tensor::new(&[[0u32, 0u32], [2u32, 0u32], [1u32, 1u32], [0u32, 2u32]], &device)?;
+    let gather_ids = Tensor::new(
+        &[[0u32, 0u32], [2u32, 0u32], [1u32, 1u32], [0u32, 2u32]],
+        &device,
+    )?;
     let hs = t.gather(&gather_ids, 1)?;
     assert_eq!(
         hs.to_vec2::<f32>()?,

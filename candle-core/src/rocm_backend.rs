@@ -112,6 +112,10 @@ impl RocmDevice {
         Self::new(ordinal)
     }
 
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
     pub fn id(&self) -> DeviceId {
         DeviceId(self.ordinal)
     }
