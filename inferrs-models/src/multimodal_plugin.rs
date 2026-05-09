@@ -488,8 +488,6 @@ fn device_tag(device: &Device) -> Result<u8> {
         Device::Cpu => Ok(0),
         Device::Metal(_) => Ok(1),
         Device::Cuda(_) => Ok(2),
-        // The multimodal plugin only understands CPU / Metal / CUDA tags today.
-        // Route ROCm through the CPU path until the plugin grows a native HIP tag.
-        Device::Rocm(_) => Ok(0),
+        Device::Rocm(_) => Ok(3),
     }
 }

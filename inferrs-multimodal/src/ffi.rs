@@ -7,7 +7,7 @@
 //! - Encoder objects are heap-boxed and returned as opaque `*mut c_void` handles.
 //! - Tensor data crosses as raw `f32`/`i64` pointers + shape slices.
 //! - Weight sources are passed as null-terminated C-string paths (safetensors).
-//! - Device is encoded as a `u8`: 0 = CPU, 1 = Metal, 2 = CUDA.
+//! - Device is encoded as a `u8`: 0 = CPU, 1 = Metal, 2 = CUDA, 3 = ROCm.
 //! - DType is encoded as a `u8`: 0 = F32, 1 = F16, 2 = BF16.
 //! - Errors are returned as a heap-allocated C string via `inferrs_mm_last_error()`
 //!   and a non-zero return code.
@@ -70,6 +70,8 @@ fn decode_device(tag: u8) -> Result<Device> {
         1 => Ok(Device::new_metal(0)?),
         #[cfg(any(feature = "cuda", target_os = "linux", target_os = "windows"))]
         2 => Ok(Device::new_cuda(0)?),
+        #[cfg(feature = "rocm")]
+        3 => Ok(Device::new_rocm(0)?),
         other => anyhow::bail!("unknown device tag {other}"),
     }
 }

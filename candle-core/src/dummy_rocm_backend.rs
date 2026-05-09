@@ -10,16 +10,20 @@ pub struct RocmDevice;
 #[derive(Debug)]
 pub struct RocmStorage;
 
-impl RocmStorage {
-    pub fn transfer_to_device(&self, _dst: &RocmDevice) -> Result<Self> {
-        Err(Error::NotCompiledWithRocmSupport)
-    }
-}
-
 macro_rules! fail {
     () => {
         unimplemented!("rocm support has not been enabled, add `rocm` feature to enable.")
     };
+}
+
+impl RocmStorage {
+    pub(crate) fn shadow(&self) -> &CpuStorage {
+        fail!()
+    }
+
+    pub fn transfer_to_device(&self, _dst: &RocmDevice) -> Result<Self> {
+        Err(Error::NotCompiledWithRocmSupport)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +32,10 @@ pub struct DeviceId(usize);
 impl RocmDevice {
     pub fn new_with_stream(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithRocmSupport)
+    }
+
+    pub fn ordinal(&self) -> usize {
+        fail!()
     }
 
     pub fn id(&self) -> DeviceId {
