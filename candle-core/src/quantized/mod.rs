@@ -62,9 +62,9 @@ impl Device {
                 let storage = dtype.cpu_zeros(elem_count);
                 Ok(QStorage::Cpu(storage))
             }
-            Device::Rocm(_rocm) => {
+            Device::Rocm(rocm) => {
                 let storage = dtype.cpu_zeros(elem_count);
-                Ok(QStorage::Cpu(storage))
+                Ok(QStorage::Rocm(storage, rocm.clone()))
             }
             Device::Metal(metal) => {
                 let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
@@ -80,6 +80,7 @@ impl Device {
 
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
+    Rocm(Box<dyn QuantizedType>, crate::RocmDevice),
     Metal(metal::QMetalStorage),
     Cuda(cuda::QCudaStorage),
 }
@@ -88,7 +89,7 @@ impl QStorage {
     pub fn from_data(data: Cow<'_, [u8]>, device: &Device, dtype: GgmlDType) -> Result<Self> {
         match device {
             Device::Cpu => Ok(Self::Cpu(dtype.from_data(data))),
-            Device::Rocm(_d) => Ok(Self::Cpu(dtype.from_data(data))),
+            Device::Rocm(d) => Ok(Self::Rocm(dtype.from_data(data), d.clone())),
             Device::Metal(d) => match dtype {
                 GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),
@@ -135,6 +136,7 @@ impl QStorage {
     fn block_size(&self) -> usize {
         match self {
             QStorage::Cpu(storage) => storage.block_size(),
+            QStorage::Rocm(storage, _) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
         }
@@ -143,6 +145,7 @@ impl QStorage {
     fn dtype(&self) -> GgmlDType {
         match self {
             QStorage::Cpu(storage) => storage.dtype(),
+            QStorage::Rocm(storage, _) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
         }
@@ -151,6 +154,7 @@ impl QStorage {
     fn device(&self) -> Device {
         match self {
             QStorage::Cpu(_storage) => Device::Cpu,
+            QStorage::Rocm(_storage, device) => Device::Rocm(device.clone()),
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
         }
@@ -159,6 +163,7 @@ impl QStorage {
     fn size_in_bytes(&self) -> usize {
         match self {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
+            QStorage::Rocm(storage, _) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
         }
@@ -168,6 +173,9 @@ impl QStorage {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
                 storage.from_float(src.as_slice::<f32>()?);
+            }
+            (QStorage::Rocm(storage, _), Storage::Rocm(src)) => {
+                storage.from_float(src.shadow().as_slice::<f32>()?);
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
@@ -186,6 +194,13 @@ impl QStorage {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
                 storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
             }
+            (QStorage::Rocm(storage, _), Storage::Rocm(src)) => {
+                storage.from_float_imatrix(
+                    src.shadow().as_slice::<f32>()?,
+                    imatrix_weights,
+                    n_per_row,
+                );
+            }
             (QStorage::Metal(storage), Storage::Metal(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
             }
@@ -200,6 +215,9 @@ impl QStorage {
     fn quantize_onto(&mut self, src: &Storage) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float(src.as_slice::<f32>()?);
+            }
+            (QStorage::Rocm(storage, _), Storage::Cpu(src)) => {
                 storage.from_float(src.as_slice::<f32>()?);
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
@@ -219,6 +237,9 @@ impl QStorage {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
                 storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
             }
+            (QStorage::Rocm(storage, _), Storage::Cpu(src)) => {
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+            }
             (QStorage::Metal(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
             }
@@ -233,6 +254,7 @@ impl QStorage {
     fn dequantize(&self, elem_count: usize) -> Result<Storage> {
         match self {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
+            QStorage::Rocm(storage, _) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
         }
@@ -246,6 +268,12 @@ impl QStorage {
                 let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
                 Ok(Cow::from(data))
             }
+            QStorage::Rocm(storage, _) => {
+                let data_ptr = storage.as_ptr();
+                let size_in_bytes = storage.storage_size_in_bytes();
+                let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
+                Ok(Cow::from(data))
+            }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
         }
@@ -254,7 +282,7 @@ impl QStorage {
     pub fn device_ptr(&self) -> Result<*const u8> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr(),
-            QStorage::Metal(_) | QStorage::Cpu(_) => {
+            QStorage::Metal(_) | QStorage::Cpu(_) | QStorage::Rocm(_, _) => {
                 crate::bail!("not implemented");
             }
         }
@@ -713,7 +741,7 @@ impl QTensor {
     pub fn device_ptr(&self) -> Result<*const u8> {
         match &self.storage {
             QStorage::Cuda(storage) => storage.device_ptr(),
-            QStorage::Metal(_) | QStorage::Cpu(_) => {
+            QStorage::Metal(_) | QStorage::Cpu(_) | QStorage::Rocm(_, _) => {
                 crate::bail!("not implemented");
             }
         }
@@ -945,6 +973,7 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
+            QStorage::Rocm(storage, _) => storage,
             QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
         };
         match storage.dtype() {

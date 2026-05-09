@@ -128,7 +128,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
     let data: QStorage = match device {
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
-        Device::Rocm(_rocm) => QStorage::Cpu(Box::new(data.to_vec())),
+        Device::Rocm(rocm) => QStorage::Rocm(Box::new(data.to_vec()), rocm.clone()),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
     };
