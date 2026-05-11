@@ -12,14 +12,29 @@ pub struct DeviceId(usize);
 
 #[derive(Debug, Clone)]
 pub struct RocmDevice {
+    inner: Arc<RocmDeviceInner>,
+}
+
+struct RocmDeviceInner {
     ordinal: usize,
+    runtime: hiparc::HipRuntime,
+    blas: Option<hiparc::HipBlas>,
+}
+
+impl std::fmt::Debug for RocmDeviceInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocmDeviceInner")
+            .field("ordinal", &self.ordinal)
+            .field("has_blas", &self.blas.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct RawRocmBuffer {
     ptr: *mut c_void,
     len_bytes: usize,
-    ordinal: usize,
+    device: RocmDevice,
 }
 
 unsafe impl Send for RawRocmBuffer {}
@@ -30,11 +45,8 @@ impl Drop for RawRocmBuffer {
         if self.ptr.is_null() {
             return;
         }
-        let Ok(runtime) = hiparc::HipRuntime::load() else {
-            return;
-        };
-        let _ = runtime.init();
-        let _ = runtime.set_device(self.ordinal as i32);
+        let runtime = self.device.runtime();
+        let _ = runtime.set_device(self.device.ordinal() as i32);
         let _ = runtime.free(self.ptr);
     }
 }
@@ -106,7 +118,7 @@ fn rocm_storage_from_raw_parts(
         buffer: Arc::new(RawRocmBuffer {
             ptr,
             len_bytes,
-            ordinal: device.ordinal,
+            device: device.clone(),
         }),
         shadow,
         device: device.clone(),
@@ -242,12 +254,13 @@ fn native_matmul_f32(
     cfg: HipblasMatmulConfig,
     elem_count: usize,
 ) -> Result<RocmStorage> {
-    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-    runtime.init().map_err(map_hip_err)?;
+    let runtime = device.runtime();
     runtime
-        .set_device(device.ordinal as i32)
+        .set_device(device.ordinal() as i32)
         .map_err(map_hip_err)?;
-    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let hipblas = device
+        .blas()
+        .ok_or_else(|| crate::Error::wrap("hipBLAS is unavailable for ROCm matmul"))?;
     let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
     let len_bytes = elem_count * std::mem::size_of::<f32>();
     let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
@@ -296,12 +309,13 @@ fn native_matmul_f64(
     cfg: HipblasMatmulConfig,
     elem_count: usize,
 ) -> Result<RocmStorage> {
-    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-    runtime.init().map_err(map_hip_err)?;
+    let runtime = device.runtime();
     runtime
-        .set_device(device.ordinal as i32)
+        .set_device(device.ordinal() as i32)
         .map_err(map_hip_err)?;
-    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let hipblas = device
+        .blas()
+        .ok_or_else(|| crate::Error::wrap("hipBLAS is unavailable for ROCm matmul"))?;
     let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
     let len_bytes = elem_count * std::mem::size_of::<f64>();
     let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
@@ -350,12 +364,13 @@ fn native_matmul_f16(
     cfg: HipblasMatmulConfig,
     elem_count: usize,
 ) -> Result<RocmStorage> {
-    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-    runtime.init().map_err(map_hip_err)?;
+    let runtime = device.runtime();
     runtime
-        .set_device(device.ordinal as i32)
+        .set_device(device.ordinal() as i32)
         .map_err(map_hip_err)?;
-    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let hipblas = device
+        .blas()
+        .ok_or_else(|| crate::Error::wrap("hipBLAS is unavailable for ROCm matmul"))?;
     let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
     let len_bytes = elem_count * std::mem::size_of::<f16>();
     let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
@@ -404,12 +419,13 @@ fn native_matmul_bf16(
     cfg: HipblasMatmulConfig,
     elem_count: usize,
 ) -> Result<RocmStorage> {
-    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-    runtime.init().map_err(map_hip_err)?;
+    let runtime = device.runtime();
     runtime
-        .set_device(device.ordinal as i32)
+        .set_device(device.ordinal() as i32)
         .map_err(map_hip_err)?;
-    let hipblas = hiparc::HipBlas::load().map_err(map_hip_err)?;
+    let hipblas = device
+        .blas()
+        .ok_or_else(|| crate::Error::wrap("hipBLAS is unavailable for ROCm matmul"))?;
     let handle = hipblas.create_host_handle().map_err(map_hip_err)?;
     let len_bytes = elem_count * std::mem::size_of::<bf16>();
     let out_ptr = runtime.malloc(len_bytes).map_err(map_hip_err)?;
@@ -459,10 +475,9 @@ fn native_matmul_bf16(
 }
 
 fn upload_shadow(device: &RocmDevice, shadow: CpuStorage) -> Result<RocmStorage> {
-    let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-    runtime.init().map_err(map_hip_err)?;
+    let runtime = device.runtime();
     runtime
-        .set_device(device.ordinal as i32)
+        .set_device(device.ordinal() as i32)
         .map_err(map_hip_err)?;
     let bytes = cpu_storage_as_bytes(&shadow);
     let ptr = if bytes.is_empty() {
@@ -483,7 +498,7 @@ fn upload_shadow(device: &RocmDevice, shadow: CpuStorage) -> Result<RocmStorage>
         buffer: Arc::new(RawRocmBuffer {
             ptr,
             len_bytes: bytes.len(),
-            ordinal: device.ordinal,
+            device: device.clone(),
         }),
         shadow,
         device: device.clone(),
@@ -491,16 +506,24 @@ fn upload_shadow(device: &RocmDevice, shadow: CpuStorage) -> Result<RocmStorage>
 }
 
 impl RocmDevice {
+    fn runtime(&self) -> &hiparc::HipRuntime {
+        &self.inner.runtime
+    }
+
+    fn blas(&self) -> Option<&hiparc::HipBlas> {
+        self.inner.blas.as_ref()
+    }
+
     pub fn new_with_stream(ordinal: usize) -> Result<Self> {
         Self::new(ordinal)
     }
 
     pub fn ordinal(&self) -> usize {
-        self.ordinal
+        self.inner.ordinal
     }
 
     pub fn id(&self) -> DeviceId {
-        DeviceId(self.ordinal)
+        DeviceId(self.inner.ordinal)
     }
 }
 
@@ -795,17 +818,17 @@ impl BackendStorage for RocmStorage {
         let elem_count = bmnk.0 * bmnk.1 * bmnk.2;
         let cfg = HipblasMatmulConfig::new(bmnk, lhs_l, rhs_l);
 
-        match (&self.shadow, &rhs.shadow, cfg) {
-            (CpuStorage::BF16(_), CpuStorage::BF16(_), Ok(cfg)) => {
+        match (&self.shadow, &rhs.shadow, cfg, self.device.blas()) {
+            (CpuStorage::BF16(_), CpuStorage::BF16(_), Ok(cfg), Some(_)) => {
                 native_matmul_bf16(&self.device, self, rhs, cfg, elem_count)
             }
-            (CpuStorage::F16(_), CpuStorage::F16(_), Ok(cfg)) => {
+            (CpuStorage::F16(_), CpuStorage::F16(_), Ok(cfg), Some(_)) => {
                 native_matmul_f16(&self.device, self, rhs, cfg, elem_count)
             }
-            (CpuStorage::F32(_), CpuStorage::F32(_), Ok(cfg)) => {
+            (CpuStorage::F32(_), CpuStorage::F32(_), Ok(cfg), Some(_)) => {
                 native_matmul_f32(&self.device, self, rhs, cfg, elem_count)
             }
-            (CpuStorage::F64(_), CpuStorage::F64(_), Ok(cfg)) => {
+            (CpuStorage::F64(_), CpuStorage::F64(_), Ok(cfg), Some(_)) => {
                 native_matmul_f64(&self.device, self, rhs, cfg, elem_count)
             }
             _ => self.binary_cpu(rhs, |lhs, rhs| lhs.matmul(rhs, bmnk, lhs_l, rhs_l)),
@@ -862,17 +885,24 @@ impl BackendDevice for RocmDevice {
         if ordinal >= count {
             crate::bail!("ROCm device ordinal {ordinal} out of range, available devices: {count}")
         }
-        Ok(Self { ordinal })
+        let blas = hiparc::HipBlas::load().ok();
+        Ok(Self {
+            inner: Arc::new(RocmDeviceInner {
+                ordinal,
+                runtime,
+                blas,
+            }),
+        })
     }
 
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Rocm {
-            gpu_id: self.ordinal,
+            gpu_id: self.inner.ordinal,
         }
     }
 
     fn same_device(&self, rhs: &Self) -> bool {
-        self.ordinal == rhs.ordinal
+        self.inner.ordinal == rhs.inner.ordinal
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
@@ -924,10 +954,9 @@ impl BackendDevice for RocmDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        let runtime = hiparc::HipRuntime::load().map_err(map_hip_err)?;
-        runtime.init().map_err(map_hip_err)?;
+        let runtime = self.runtime();
         runtime
-            .set_device(self.ordinal as i32)
+            .set_device(self.ordinal() as i32)
             .map_err(map_hip_err)?;
         runtime.synchronize().map_err(map_hip_err)
     }
