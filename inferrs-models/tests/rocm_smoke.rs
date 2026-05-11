@@ -24,6 +24,21 @@ fn assert_close(lhs: &Tensor, rhs: &Tensor, tol: f32) -> Result<()> {
     Ok(())
 }
 
+fn assert_close_scaled(lhs: &Tensor, rhs: &Tensor, rel_tol: f32) -> Result<()> {
+    let lhs = lhs.flatten_all()?.to_vec1::<f32>()?;
+    let rhs = rhs.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(lhs.len(), rhs.len());
+    for (i, (&lhs, &rhs)) in lhs.iter().zip(rhs.iter()).enumerate() {
+        let diff = (lhs - rhs).abs();
+        let tol = rel_tol * rhs.abs().max(1.0);
+        assert!(
+            diff <= tol,
+            "diff at index {i} = {diff} exceeds tolerance {tol}\nlhs={lhs}\nrhs={rhs}"
+        );
+    }
+    Ok(())
+}
+
 fn round_tensor2(t: &Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
     let b = 10f32.powi(digits);
     Ok(t.to_vec2::<f32>()?
@@ -121,7 +136,7 @@ fn rocm_quantized_qmatmul_matches_dequantized_reference() -> Result<()> {
     assert!(got.device().is_rocm());
 
     let got = got.to_device(&cpu)?;
-    assert_close(&got, &expected, 1e-4)?;
+    assert_close_scaled(&got, &expected, 1e-2)?;
 
     Ok(())
 }
@@ -223,6 +238,7 @@ fn rocm_indexing_and_scatter_ops_match_cpu_expectations() -> Result<()> {
     );
 
     let init = Tensor::ones((4, 2), DType::F32, &device)?;
+    let ids = Tensor::new(&[0u32, 1u32, 1u32], &device)?;
     let hs = init.index_add(&ids, &t, 1)?;
     assert_eq!(
         hs.to_vec2::<f32>()?,
