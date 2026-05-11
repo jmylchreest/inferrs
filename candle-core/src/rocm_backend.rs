@@ -141,6 +141,16 @@ struct HipblasMatmulConfig {
     batch_count: i32,
 }
 
+fn try_i32(value: usize, what: &'static str) -> Result<i32> {
+    i32::try_from(value)
+        .map_err(|_| crate::Error::wrap(format!("{what} value {value} exceeds i32::MAX")))
+}
+
+fn try_i64(value: usize, what: &'static str) -> Result<i64> {
+    i64::try_from(value)
+        .map_err(|_| crate::Error::wrap(format!("{what} value {value} exceeds i64::MAX")))
+}
+
 impl HipblasMatmulConfig {
     fn new(
         (b, m, n, k): (usize, usize, usize, usize),
@@ -155,9 +165,9 @@ impl HipblasMatmulConfig {
         let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
 
         let (lda, trans_a) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-            (n as i32, hiparc::HipblasOperation::None)
+            (try_i32(n, "rhs lda")?, hiparc::HipblasOperation::None)
         } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-            (k as i32, hiparc::HipblasOperation::Transpose)
+            (try_i32(k, "rhs lda")?, hiparc::HipblasOperation::Transpose)
         } else {
             crate::bail!(
                 "ROCm matmul requires contiguous or simple-transpose rhs layout, got lhs stride {:?}, rhs stride {:?}, mnk {:?}",
@@ -168,9 +178,9 @@ impl HipblasMatmulConfig {
         };
 
         let (ldb, trans_b) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-            (k as i32, hiparc::HipblasOperation::None)
+            (try_i32(k, "lhs ldb")?, hiparc::HipblasOperation::None)
         } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-            (m as i32, hiparc::HipblasOperation::Transpose)
+            (try_i32(m, "lhs ldb")?, hiparc::HipblasOperation::Transpose)
         } else {
             crate::bail!(
                 "ROCm matmul requires contiguous or simple-transpose lhs layout, got lhs stride {:?}, rhs stride {:?}, mnk {:?}",
@@ -209,16 +219,20 @@ impl HipblasMatmulConfig {
         Ok(Self {
             trans_a,
             trans_b,
-            m: n as i32,
-            n: m as i32,
-            k: k as i32,
+            m: try_i32(n, "matmul m")?,
+            n: try_i32(m, "matmul n")?,
+            k: try_i32(k, "matmul k")?,
             lda,
             ldb,
-            ldc: n as i32,
-            stride_a: stride_a as i64,
-            stride_b: stride_b as i64,
-            stride_c: (m * n) as i64,
-            batch_count: b as i32,
+            ldc: try_i32(n, "matmul ldc")?,
+            stride_a: try_i64(stride_a, "matmul stride_a")?,
+            stride_b: try_i64(stride_b, "matmul stride_b")?,
+            stride_c: try_i64(
+                m.checked_mul(n)
+                    .ok_or_else(|| crate::Error::wrap("matmul stride_c overflow"))?,
+                "matmul stride_c",
+            )?,
+            batch_count: try_i32(b, "matmul batch_count")?,
         })
     }
 }
