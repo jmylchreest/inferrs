@@ -1,7 +1,10 @@
-use crate::backend::BackendStorage;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, RocmStorage, Result,
+    Shape,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -10,6 +13,7 @@ use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3}
 pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
+    Rocm(RocmStorage),
     Metal(MetalStorage),
 }
 
@@ -20,6 +24,10 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Cuda(storage))
+            }
+            Self::Rocm(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Rocm(storage))
             }
             Self::Metal(storage) => {
                 let storage = storage.try_clone(layout)?;
@@ -32,6 +40,7 @@ impl Storage {
         match self {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
+            Self::Rocm(storage) => Device::Rocm(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
         }
     }
@@ -40,6 +49,7 @@ impl Storage {
         match self {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
+            Self::Rocm(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
         }
     }
@@ -78,6 +88,7 @@ impl Storage {
         match self {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
+            Storage::Rocm(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
         }
     }
@@ -91,6 +102,10 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Cuda(storage))
+            }
+            Self::Rocm(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::Rocm(storage))
             }
             Self::Metal(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
@@ -109,6 +124,10 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
@@ -125,6 +144,10 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Cuda(storage))
+            }
+            Self::Rocm(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::Rocm(storage))
             }
             Self::Metal(storage) => {
                 let storage = storage.elu(layout, alpha)?;
@@ -150,6 +173,10 @@ impl Storage {
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cuda(storage))
+            }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
             }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
@@ -178,6 +205,10 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.reduce_op(op, layout, s)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
@@ -195,6 +226,10 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
@@ -211,6 +246,11 @@ impl Storage {
             Self::Cuda(storage) => {
                 let (storage, shape) = c.cuda_fwd(storage, l)?;
                 Ok((Self::Cuda(storage), shape))
+            }
+            Self::Rocm(storage) => {
+                let (shadow, shape) = c.cpu_fwd(storage.shadow(), l)?;
+                let storage = storage.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok((Self::Rocm(storage), shape))
             }
             Self::Metal(storage) => {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
@@ -235,6 +275,11 @@ impl Storage {
             (Self::Cuda(s1), Self::Cuda(s2)) => {
                 let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Cuda(s), shape))
+            }
+            (Self::Rocm(s1), Self::Rocm(s2)) => {
+                let (shadow, shape) = c.cpu_fwd(s1.shadow(), l1, s2.shadow(), l2)?;
+                let storage = s1.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok((Self::Rocm(storage), shape))
             }
             (Self::Metal(s1), Self::Metal(s2)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
@@ -264,6 +309,12 @@ impl Storage {
                 let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Cuda(s), shape))
             }
+            (Self::Rocm(s1), Self::Rocm(s2), Self::Rocm(s3)) => {
+                let (shadow, shape) =
+                    c.cpu_fwd(s1.shadow(), l1, s2.shadow(), l2, s3.shadow(), l3)?;
+                let storage = s1.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok((Self::Rocm(storage), shape))
+            }
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
@@ -276,6 +327,12 @@ impl Storage {
         match self {
             Self::Cpu(storage) => c.cpu_fwd(storage, l),
             Self::Cuda(storage) => c.cuda_fwd(storage, l),
+            Self::Rocm(storage) => {
+                let mut shadow = storage.shadow().clone();
+                c.cpu_fwd(&mut shadow, l)?;
+                *storage = storage.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok(())
+            }
             Self::Metal(storage) => c.metal_fwd(storage, l),
         }
     }
@@ -291,6 +348,12 @@ impl Storage {
         match (self, t2) {
             (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
             (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
+            (Self::Rocm(s1), Self::Rocm(s2)) => {
+                let mut shadow = s1.shadow().clone();
+                c.cpu_fwd(&mut shadow, l1, s2.shadow(), l2)?;
+                *s1 = s1.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok(())
+            }
             (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
             _ => unreachable!(),
         }
@@ -310,6 +373,12 @@ impl Storage {
         match (self, t2, t3) {
             (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
             (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Rocm(s1), Self::Rocm(s2), Self::Rocm(s3)) => {
+                let mut shadow = s1.shadow().clone();
+                c.cpu_fwd(&mut shadow, l1, s2.shadow(), l2, s3.shadow(), l3)?;
+                *s1 = s1.device().storage_from_cpu_storage_owned(shadow)?;
+                Ok(())
+            }
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 c.metal_fwd(s1, l1, s2, l2, s3, l3)
             }
@@ -326,6 +395,10 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Cuda(storage))
+            }
+            Self::Rocm(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::Rocm(storage))
             }
             Self::Metal(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
@@ -350,6 +423,10 @@ impl Storage {
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cuda(storage))
+            }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
             }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
@@ -385,6 +462,10 @@ impl Storage {
             (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
+            }
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
             }
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
@@ -439,6 +520,10 @@ impl Storage {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
+            }
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
@@ -469,6 +554,10 @@ impl Storage {
             (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
+            }
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
             }
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
@@ -501,6 +590,10 @@ impl Storage {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
+            }
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
@@ -529,6 +622,10 @@ impl Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
@@ -551,6 +648,10 @@ impl Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
@@ -568,6 +669,10 @@ impl Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage = storage.upsample_nearest1d(layout, sz)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
@@ -584,6 +689,10 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Cuda(storage))
+            }
+            Self::Rocm(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Rocm(storage))
             }
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
@@ -612,6 +721,11 @@ impl Storage {
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Cuda(storage))
             }
+            Self::Rocm(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Rocm(storage))
+            }
             Self::Metal(storage) => {
                 let storage =
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
@@ -639,6 +753,10 @@ impl Storage {
             (Self::Cuda(cond), Self::Cuda(t), Self::Cuda(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Cuda(storage))
+            }
+            (Self::Rocm(cond), Self::Rocm(t), Self::Rocm(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Rocm(storage))
             }
             (Self::Metal(cond), Self::Metal(t), Self::Metal(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
@@ -670,6 +788,10 @@ impl Storage {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(s), Self::Rocm(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(s), Self::Metal(indexes)) => {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
@@ -696,6 +818,9 @@ impl Storage {
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
@@ -720,6 +845,9 @@ impl Storage {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
@@ -750,6 +878,10 @@ impl Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
@@ -774,6 +906,10 @@ impl Storage {
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Cuda(storage))
+            }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Rocm(storage))
             }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
@@ -806,6 +942,10 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cuda(storage))
             }
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
+            }
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
@@ -829,6 +969,7 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Rocm(src), Self::Rocm(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
@@ -855,6 +996,9 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o),
             (Self::Cuda(src), Self::Cuda(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (Self::Rocm(src), Self::Rocm(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Metal(src), Self::Metal(dst)) => {

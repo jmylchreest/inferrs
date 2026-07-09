@@ -1,14 +1,27 @@
-/// Probe whether a ROCm (AMD GPU) device is available and functional.
+//! Probe whether a ROCm/HIP device is available.
+//!
+//! This plugin loads the HIP runtime at probe time instead of linking Candle's
+//! CUDA path, so it can build on ROCm-only hosts without `nvcc` or `nvidia-smi`.
 ///
-/// candle-core's `cuda` feature covers both NVIDIA CUDA and AMD ROCm/HIP —
-/// the same `Device::new_cuda(0)` call works when the library was compiled
-/// with the ROCm toolchain (`hipcc`, `ROCM_PATH` set at build time).
-///
-/// Returns 0 on success, non-zero on failure.
+/// Return 0 when a HIP device is available, non-zero otherwise.
 #[no_mangle]
 pub extern "C" fn inferrs_backend_probe() -> i32 {
-    match candle_core::Device::new_cuda(0) {
-        Ok(_) => 0,
-        Err(_) => 1,
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
+    {
+        match hiparc::HipRuntime::probe_device() {
+            Ok(count) if count > 0 => 0,
+            _ => 1,
+        }
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    {
+        1
     }
 }

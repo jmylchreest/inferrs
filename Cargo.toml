@@ -5,6 +5,7 @@ members = [
     "inferrs-models",
     "inferrs-multimodal",
     "inferrs-kernels",
+    "hiparc",
     "backends/inferrs-backend-cann",
     "backends/inferrs-backend-cuda",
     "backends/inferrs-backend-metal",
@@ -18,7 +19,7 @@ members = [
 # `cargo build` (no -p flag) builds only the listed members.
 # To build a specific backend explicitly:
 #   cargo build -p inferrs-backend-cuda     (requires nvcc / CUDA SDK)
-#   cargo build -p inferrs-backend-rocm     (requires hipcc / ROCm)
+#   cargo build -p inferrs-backend-rocm     (runtime HIP probe)
 #   cargo build -p inferrs-backend-cann     (Linux/Android only; requires
 #                                            libascendcl.so from CANN SDK)
 # The Metal backend links against the system Metal framework (always present on
@@ -46,6 +47,7 @@ candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
 anyhow = "1"
+hiparc = { path = "hiparc" }
 
 [profile.release]
 lto = true

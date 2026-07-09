@@ -314,6 +314,7 @@ dependencies = [
  "float8 0.6.1",
  "gemm 0.19.0",
  "half",
+ "hiparc",
  "libm",
  "memmap2",
  "num-traits",
@@ -1416,6 +1417,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hiparc"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1712,6 +1720,7 @@ dependencies = [
  "futures",
  "half",
  "hf-hub",
+ "hiparc",
  "image",
  "indicatif",
  "inferrs-models",
@@ -1782,8 +1791,7 @@ dependencies = [
 name = "inferrs-backend-rocm"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "candle-core",
+ "hiparc",
 ]
 
 [[package]]

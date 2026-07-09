@@ -107,7 +107,7 @@ pub struct ServeArgs {
     #[arg(long, default_value_t = 0)]
     pub max_seq_len: usize,
 
-    /// Device: cpu, cuda, or metal
+    /// Device: cpu, cuda, rocm, or metal
     #[arg(long, default_value = "auto")]
     pub device: String,
 
@@ -255,6 +255,20 @@ impl ServeArgs {
                 let device = candle_core::Device::new_metal(0)?;
                 Ok(device)
             }
+            "rocm" => {
+                #[cfg(feature = "rocm")]
+                {
+                    let device = candle_core::Device::new_rocm(0)?;
+                    Ok(device)
+                }
+                #[cfg(not(feature = "rocm"))]
+                {
+                    anyhow::bail!(
+                        "ROCm support is not compiled in — rebuild with \
+                         `--features rocm` to enable the ROCm device"
+                    )
+                }
+            }
             "auto" => Self::auto_device(),
             other => anyhow::bail!("Unknown device: {other}"),
         }
@@ -350,18 +364,25 @@ impl ServeArgs {
                     all(target_os = "windows", target_arch = "x86_64")
                 ))]
                 BackendKind::Rocm => {
-                    // ROCm uses the same HIP/CUDA device path in candle.
-                    #[cfg(feature = "cuda")]
+                    #[cfg(feature = "rocm")]
                     {
-                        let device = candle_core::Device::new_cuda(0)?;
-                        tracing::info!("Using ROCm device (via plugin)");
-                        disable_cuda_event_tracking(&device);
-                        return Ok(device);
+                        match candle_core::Device::new_rocm(0) {
+                            Ok(device) => {
+                                tracing::info!("Using ROCm device (via plugin)");
+                                return Ok(device);
+                            }
+                            Err(err) => {
+                                tracing::info!(
+                                    "ROCm runtime detected but Candle could not initialize \
+                                     the ROCm device: {err}; falling back to CPU"
+                                );
+                            }
+                        }
                     }
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(feature = "rocm"))]
                     tracing::info!(
                         "ROCm plugin detected but binary was built without \
-                         `--features cuda` — falling back to CPU"
+                         `--features rocm` — falling back to CPU"
                     );
                 }
                 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -485,17 +506,25 @@ impl ServeArgs {
                     );
                 }
                 BackendKind::Rocm => {
-                    #[cfg(feature = "cuda")]
+                    #[cfg(feature = "rocm")]
                     {
-                        let device = candle_core::Device::new_cuda(0)?;
-                        tracing::info!("Using ROCm device (via plugin)");
-                        disable_cuda_event_tracking(&device);
-                        return Ok(device);
+                        match candle_core::Device::new_rocm(0) {
+                            Ok(device) => {
+                                tracing::info!("Using ROCm device (via plugin)");
+                                return Ok(device);
+                            }
+                            Err(err) => {
+                                tracing::info!(
+                                    "ROCm runtime detected but Candle could not initialize \
+                                     the ROCm device: {err}; falling back to CPU"
+                                );
+                            }
+                        }
                     }
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(feature = "rocm"))]
                     tracing::info!(
                         "ROCm plugin detected but binary was built without \
-                         `--features cuda` — falling back to CPU"
+                         `--features rocm` — falling back to CPU"
                     );
                 }
                 BackendKind::Vulkan => {

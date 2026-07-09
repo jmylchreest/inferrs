@@ -488,5 +488,6 @@ fn device_tag(device: &Device) -> Result<u8> {
         Device::Cpu => Ok(0),
         Device::Metal(_) => Ok(1),
         Device::Cuda(_) => Ok(2),
+        Device::Rocm(_) => Ok(3),
     }
 }

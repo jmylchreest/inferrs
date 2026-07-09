@@ -945,6 +945,21 @@ fn query_device_memory(device: &Device) -> usize {
     match device {
         #[cfg(target_os = "macos")]
         Device::Metal(metal_dev) => metal_dev.metal_device().recommended_max_working_set_size(),
+        #[cfg(feature = "rocm")]
+        Device::Rocm(rocm_dev) => {
+            let (free_bytes, total_bytes) = query_rocm_mem_info(rocm_dev).unwrap_or_else(|| {
+                tracing::warn!(
+                    "failed to query ROCm memory via hipMemGetInfo, falling back to 4 GiB baseline"
+                );
+                (4 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
+            });
+            tracing::info!(
+                "ROCm memory: total={:.2} GiB, free={:.2} GiB",
+                total_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+                free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            );
+            total_bytes
+        }
         #[cfg(all(
             feature = "cuda",
             any(
@@ -1010,6 +1025,14 @@ fn query_device_memory(device: &Device) -> usize {
             4 * 1024 * 1024 * 1024
         }
     }
+}
+
+#[cfg(feature = "rocm")]
+fn query_rocm_mem_info(rocm_dev: &candle_core::RocmDevice) -> Option<(usize, usize)> {
+    let runtime = hiparc::HipRuntime::load().ok()?;
+    runtime.init().ok()?;
+    runtime.set_device(rocm_dev.ordinal() as i32).ok()?;
+    runtime.mem_get_info().ok()
 }
 
 /// Query `cuMemGetInfo_v2` via dynamic library loading and return

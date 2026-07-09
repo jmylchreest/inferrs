@@ -70,6 +70,7 @@ mod dtype;
 pub mod dummy_cuda_backend;
 pub mod dummy_dtype;
 mod dummy_metal_backend;
+pub mod dummy_rocm_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
@@ -81,6 +82,8 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
+#[cfg(feature = "rocm")]
+pub mod rocm_backend;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
@@ -121,6 +124,14 @@ pub use cuda_backend as cuda;
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "rocm")]
+pub use rocm_backend as rocm;
+
+#[cfg(not(feature = "rocm"))]
+pub use dummy_rocm_backend as rocm;
+
+pub use rocm::{RocmDevice, RocmStorage};
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};

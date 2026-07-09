@@ -16,6 +16,10 @@ cuda = [
     "candle-nn/cuda",
     "candle-transformers/cuda",
 ]
+rocm = [
+    "candle-core/rocm",
+    "candle-nn/rocm",
+]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
